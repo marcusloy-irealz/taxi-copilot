@@ -15,12 +15,20 @@ function apiRoutesPlugin(): Plugin {
     name: "api-routes-plugin",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        if (req.url) {
+          // Normalize Windows backslashes (e.g. api\mcp -> /api/mcp)
+          req.url = req.url.replace(/\\+/g, "/");
+          if (!req.url.startsWith("/")) {
+            req.url = "/" + req.url;
+          }
+        }
+
         if (!req.url?.startsWith("/api/")) {
           return next();
         }
 
         const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-        const pathname = url.pathname;
+        const pathname = url.pathname.replace(/\/+$/, "");
         const query: Record<string, string> = {};
         url.searchParams.forEach((val, key) => {
           query[key] = val;

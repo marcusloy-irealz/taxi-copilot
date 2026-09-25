@@ -19,6 +19,9 @@ async function startServer() {
 
   // CORS and parsing
   app.use((req, res, next) => {
+    if (req.url && req.url.includes("\\")) {
+      req.url = req.url.replace(/\\+/g, "/");
+    }
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-requested-with");

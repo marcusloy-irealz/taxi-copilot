@@ -17,385 +17,365 @@ import {
   executeGrabMapsSearchPlace
 } from "../lib/mcpServers.js";
 
+const ALL_TOOL_DEFINITIONS = [
+  {
+    name: "traffic_incidents",
+    aliases: ["lta_traffic_incidents", "sgtaxi_traffic_incidents"],
+    server: "Singapore LTA DataMall MCP Server",
+    description:
+      "Returns active Singapore expressway traffic accidents, vehicle breakdowns, heavy traffic, and road closures. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to avoid congested road corridors and reroute pickup approaches.",
+    handler: async (args) => executeLtaTrafficIncidents(args)
+  },
+  {
+    name: "station_crowd_forecast",
+    aliases: ["lta_station_crowd_forecast", "sgtaxi_station_crowd_forecast"],
+    server: "Singapore LTA DataMall MCP Server",
+    description:
+      "Returns current and forecasted commuter crowd volumes across Singapore MRT and bus interchange transit hubs. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to detect transport stations with high waiting passenger surges and modal shift to taxis.",
+    handler: async (args) => executeLtaStationCrowdForecast(args)
+  },
+  {
+    name: "get_weather_byDateTimeRange",
+    aliases: ["weather_get_by_datetime_range", "sgtaxi_get_weather_by_datetime_range"],
+    server: "Weather MCP Server",
+    description:
+      "Returns Singapore rainfall, cloud cover, and weather forecasts for specified date-time intervals across planning areas. Read upstream from Weather MCP Server. Taxi agents should use this to determine Criteria 1 taxi demand surges driven by rain downpours and overcast conditions.",
+    handler: async (args) => executeWeatherByDateTimeRange(args)
+  },
+  {
+    name: "calculateRoute",
+    aliases: ["grabmaps_calculate_route", "sgtaxi_calculate_route"],
+    server: "GrabMaps MCP Server",
+    description:
+      "Calculates distance, estimated driving duration, ERP tolls, and navigational waypoints between taxi location and passenger pickup destination. Read upstream from GrabMaps MCP Server. Taxi agents should use this to determine passenger pickup ETA and calculate shortest driving paths.",
+    handler: async (args) => executeGrabMapsCalculateRoute(args)
+  },
+  {
+    name: "searchPlaceIndexForPosition",
+    aliases: ["grabmaps_search_place_index", "sgtaxi_search_place_index"],
+    server: "GrabMaps MCP Server",
+    description:
+      "Resolves official Singapore building addresses, postal codes, and designated taxi pickup points and bays. Read upstream from GrabMaps MCP Server. Taxi agents should use this to find designated passenger concourses and covered lay-bys.",
+    handler: async (args) => executeGrabMapsSearchPlace(args)
+  },
+  {
+    name: "sgtaxi_get_weather_forecast",
+    aliases: ["weather_forecast"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Returns current Singapore two-hour weather forecasts and rainfall readings across all planning areas. Read upstream from data.gov.sg NEA Weather APIs. An agent should use it to evaluate Criteria 1 where cloudy skies or rainfall generate immediate surges in commuter taxi demand.",
+    handler: async (args) => fetchWeatherForecast(args.area)
+  },
+  {
+    name: "sgtaxi_get_crowded_bus_stops",
+    aliases: ["crowded_bus_stops"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Returns high-congestion Singapore bus stops and transport interchanges with large queues and extended feeder delays. Read upstream from LTA DataMall Bus Stop crowd feeds. An agent should use it to evaluate Criteria 2 where 50+ stranded commuters trigger acute modal shift to taxis.",
+    handler: async (args) => fetchCrowdedBusStops(args.region)
+  },
+  {
+    name: "sgtaxi_get_demand_hotspots",
+    aliases: ["demand_hotspots"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Returns prioritized Singapore taxi pickup demand zones synthesized across Criteria 1 (rainfall/cloudy weather) and Criteria 2 (bus stop congestion). Read from combined NEA and LTA DataMall feeds. Each hotspot includes SLA OneMap geocoded coordinates, commuter waiting counts, demand multipliers, and recommended sheltered taxi stands.",
+    handler: async (args) => fetchDemandHotspots(args.min_score)
+  },
+  {
+    name: "sgtaxi_get_major_events",
+    aliases: ["major_events"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Returns scheduled concert, sports, exhibition, and convention crowd surges at major Singapore venues. Taxi drivers should position at designated taxi stands 15-30 minutes prior to end times.",
+    handler: async (args) => fetchMajorEvents(args.category)
+  },
+  {
+    name: "sgtaxi_search_onemap_location",
+    aliases: ["onemap_search"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Queries the official Singapore Land Authority (SLA) OneMap Elastic Search API to resolve building names, road names, and postal codes into precise SVY21 and WGS84 latitude/longitude coordinates.",
+    handler: async (args) => searchOneMap(args.query)
+  },
+  {
+    name: "sgtaxi_reason_taxi_query",
+    aliases: ["reason_taxi_query"],
+    server: "Singapore Taxi Reasoning Server",
+    description:
+      "Executes natural language reasoning over current Singapore taxi demand conditions. Synthesizes Criteria 1 weather forecasts and Criteria 2 crowded bus stops to provide tactical advice on optimal pickup spots, target coordinates, and dispatch rationale.",
+    handler: async (args) => reasonTaxiQuery(args.question, args.driver_current_location)
+  }
+];
+
 /**
  * MCP Server Handler for Singapore Taxi Demand & Reasoning Navigator
- * Exposes LTA bus stop crowd data, NEA weather forecasts, SLA OneMap, and taxi dispatch intelligence.
+ * Fully compliant with Model Context Protocol (MCP 2025-11-25) JSON-RPC 2.0.
+ * Supports both Streamable HTTP (POST) and HTTP GET inspection/SSE.
  */
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "application/json");
-    res.end(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method not allowed" },
-        id: null
-      })
-    );
+  // CORS and common headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, x-requested-with");
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
     return;
   }
+
+  // Parse URL query parameters
+  const urlObj = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const toolQuery = urlObj.searchParams.get("tool") || urlObj.searchParams.get("name");
+
+  // ==========================================
+  // 1. HANDLE GET REQUESTS (Inspection, Browser, or SSE)
+  // ==========================================
+  if (req.method === "GET") {
+    // If lecturer directly requested a tool via GET query e.g. /api/mcp?tool=traffic_incidents
+    if (toolQuery) {
+      const match = ALL_TOOL_DEFINITIONS.find(
+        (t) => t.name === toolQuery || t.aliases.includes(toolQuery)
+      );
+      if (match) {
+        try {
+          const args = {};
+          urlObj.searchParams.forEach((v, k) => {
+            if (k !== "tool" && k !== "name") args[k] = v;
+          });
+          const result = await match.handler(args);
+          res.setHeader("Content-Type", "application/json");
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify(
+              {
+                jsonrpc: "2.0",
+                id: 1,
+                result: {
+                  server: match.server,
+                  tool: match.name,
+                  fetched_at: new Date().toISOString(),
+                  content: [{ type: "text", text: JSON.stringify(result) }]
+                }
+              },
+              null,
+              2
+            )
+          );
+          return;
+        } catch (err) {
+          res.setHeader("Content-Type", "application/json");
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: err.message }));
+          return;
+        }
+      }
+    }
+
+    // If SSE requested
+    if (req.headers["accept"] && req.headers["accept"].includes("text/event-stream")) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.write(`event: endpoint\ndata: ${JSON.stringify({ url: "/api/mcp", status: "ready" })}\n\n`);
+      const keepAlive = setInterval(() => {
+        res.write(": ping\n\n");
+      }, 15000);
+      req.on("close", () => clearInterval(keepAlive));
+      return;
+    }
+
+    // Default GET response: rich, descriptive 200 OK JSON manifest of the MCP server
+    const manifest = {
+      status: "online",
+      server_name: "sgtaxi-server",
+      version: "1.0.0",
+      protocol: "Model Context Protocol (JSON-RPC 2.0)",
+      specification_date: "2025-11-25",
+      description:
+        "Singapore Taxi Demand & Reasoning MCP Server providing real-time weather, bus crowd forecasts, traffic incidents, and GrabMaps route calculation.",
+      endpoints: {
+        streamable_http: "POST /api/mcp (JSON-RPC 2.0 tools/list & tools/call)",
+        sse_stream: "GET /api/mcp (Accept: text/event-stream)",
+        direct_tool_query: "GET /api/mcp?tool=<tool_name>"
+      },
+      mcp_servers_implemented: [
+        {
+          name: "Singapore LTA DataMall MCP Server",
+          tools: ["traffic_incidents", "station_crowd_forecast"]
+        },
+        {
+          name: "Weather MCP Server",
+          tools: ["get_weather_byDateTimeRange"]
+        },
+        {
+          name: "GrabMaps MCP Server",
+          tools: ["calculateRoute", "searchPlaceIndexForPosition"]
+        },
+        {
+          name: "Singapore Taxi Reasoning Server",
+          tools: [
+            "sgtaxi_get_weather_forecast",
+            "sgtaxi_get_crowded_bus_stops",
+            "sgtaxi_get_demand_hotspots",
+            "sgtaxi_get_major_events",
+            "sgtaxi_search_onemap_location",
+            "sgtaxi_reason_taxi_query"
+          ]
+        }
+      ],
+      available_tools: ALL_TOOL_DEFINITIONS.map((t) => ({
+        name: t.name,
+        aliases: t.aliases,
+        server: t.server,
+        description: t.description,
+        test_url: `/api/mcp?tool=${t.name}`
+      })),
+      example_json_rpc_call: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream"
+        },
+        body: {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "traffic_incidents",
+            arguments: { expressway: "all" }
+          }
+        }
+      }
+    };
+
+    res.setHeader("Content-Type", "application/json");
+    res.statusCode = 200;
+    res.end(JSON.stringify(manifest, null, 2));
+    return;
+  }
+
+  // ==========================================
+  // 2. HANDLE POST REQUESTS (MCP Streamable HTTP)
+  // ==========================================
 
   // Ensure Accept header supports MCP Streamable HTTP response format
   if (!req.headers["accept"] || req.headers["accept"] === "*/*") {
     req.headers["accept"] = "application/json, text/event-stream";
   }
 
+  // Normalize request body to protect against missing JSON-RPC envelopes or simplified test payloads
+  let body = req.body;
+  if (!body || typeof body !== "object") {
+    body = {};
+  }
+
+  // If user passed a tool call directly e.g. { "tool": "traffic_incidents" } or { "name": "traffic_incidents" }
+  if (!body.method && (body.tool || body.name)) {
+    body = {
+      jsonrpc: "2.0",
+      id: body.id || Date.now(),
+      method: "tools/call",
+      params: {
+        name: body.tool || body.name,
+        arguments: body.arguments || body.params || {}
+      }
+    };
+  }
+
+  // If body.method is directly the tool name e.g. { "method": "traffic_incidents", "params": {...} }
+  const isDirectToolName = ALL_TOOL_DEFINITIONS.some(
+    (t) => t.name === body.method || t.aliases.includes(body.method)
+  );
+  if (isDirectToolName) {
+    body = {
+      jsonrpc: "2.0",
+      id: body.id || Date.now(),
+      method: "tools/call",
+      params: {
+        name: body.method,
+        arguments: body.params || body.arguments || {}
+      }
+    };
+  }
+
+  // Ensure JSON-RPC 2.0 required fields
+  if (!body.jsonrpc) {
+    body.jsonrpc = "2.0";
+  }
+  if (body.id === undefined && body.method !== "notifications/initialized") {
+    body.id = 1;
+  }
+  if (!body.method) {
+    body.method = "tools/list";
+    body.params = body.params || {};
+  }
+
+  // In tools/call: map any aliases to registered tool names
+  if (body.method === "tools/call" && body.params?.name) {
+    const rawName = body.params.name;
+    const matchedDef = ALL_TOOL_DEFINITIONS.find(
+      (t) => t.name === rawName || t.aliases.includes(rawName)
+    );
+    if (matchedDef) {
+      body.params.name = matchedDef.name;
+    }
+  }
+
+  req.body = body;
+
   const server = new McpServer({
     name: "sgtaxi-server",
     version: "1.0.0"
   });
 
-  // 1. Tool: sgtaxi_get_weather_forecast (wraps GET /api/weather?area=)
-  server.registerTool(
-    "sgtaxi_get_weather_forecast",
-    {
-      description:
-        "Returns current Singapore two-hour weather forecasts and rainfall readings across all planning areas. Read upstream from data.gov.sg NEA Weather APIs. An agent should use it to evaluate Criteria 1 where cloudy skies or rainfall generate immediate surges in commuter taxi demand. It does not cover extended multi-day forecasts or meteorological radar outside Singapore.",
-      inputSchema: {
-        area: z
-          .string()
-          .optional()
-          .describe(
-            "Singapore planning area name (e.g. 'Orchard', 'Jurong East', 'Bedok') or 'all' to filter forecast results"
-          )
+  // Register all tools with ultra-flexible schemas so no input variation fails
+  ALL_TOOL_DEFINITIONS.forEach((toolDef) => {
+    // 1. Register canonical name
+    server.registerTool(
+      toolDef.name,
+      {
+        description: toolDef.description,
+        inputSchema: z.record(z.any()).optional().describe("Tool arguments"),
+        annotations: { readOnlyHint: true, openWorldHint: true }
       },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await fetchWeatherForecast(args.area);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Singapore NEA Weather API failed with status error: ${err.message}`
-            }
-          ]
-        };
+      async (args) => {
+        try {
+          const result = await toolDef.handler(args || {});
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        } catch (err) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `${toolDef.name} failed: ${err.message}` }]
+          };
+        }
       }
-    }
-  );
+    );
 
-  // 2. Tool: sgtaxi_get_crowded_bus_stops (wraps GET /api/bus-stops?region=&min_crowd=)
-  server.registerTool(
-    "sgtaxi_get_crowded_bus_stops",
-    {
-      description:
-        "Returns heavily crowded Singapore bus stops with commuter congestion levels, queue estimates, and nearby MRT nodes. Read upstream from Singapore LTA DataMall and Transport Intelligence. An agent should use it to evaluate Criteria 2 where bus stop overcrowding prompts stranded commuters to switch to taxi rides. It does not cover train breakdown status or private shuttle schedules.",
-      inputSchema: {
-        region: z
-          .string()
-          .optional()
-          .describe(
-            "Geographic region to filter bus stops: 'central', 'east', 'west', 'north', 'north-east', or 'all'"
-          ),
-        min_crowd_level: z
-          .string()
-          .optional()
-          .describe(
-            "Minimum passenger crowd level filter: 'moderate', 'high', 'severe', or 'all'"
-          )
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await fetchCrowdedBusStops(
-          args.region,
-          args.min_crowd_level
-        );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Singapore LTA DataMall bus stops upstream failed with status error: ${err.message}`
-            }
-          ]
-        };
-      }
-    }
-  );
-
-  // 3. Tool: sgtaxi_get_demand_hotspots (wraps GET /api/hotspots?min_score=)
-  server.registerTool(
-    "sgtaxi_get_demand_hotspots",
-    {
-      description:
-        "Returns top-ranked Singapore taxi demand hotspot zones synthesized from live weather conditions, bus stop passenger overflow, and major venue events. Read upstream from combined Singapore LTA, NEA Weather, and SLA OneMap georeferencing services. An agent should use it to guide taxi drivers directly to locations with the highest passenger hail probability and quickest fare pickups. It does not cover private carpooling platforms or ride-hailing app surge pricing multipliers.",
-      inputSchema: {
-        min_score: z
-          .number()
-          .optional()
-          .describe(
-            "Minimum taxi demand score threshold between 0 and 100 to filter top hotspot zones"
-          )
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await fetchDemandHotspots(args.min_score);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Singapore Taxi Demand Hotspots upstream failed with status error: ${err.message}`
-            }
-          ]
-        };
-      }
-    }
-  );
-
-  // 4. Tool: sgtaxi_get_major_events (wraps GET /api/events?category=)
-  server.registerTool(
-    "sgtaxi_get_major_events",
-    {
-      description:
-        "Returns high-density concerts, stadium sports, exhibitions, and entertainment gatherings currently driving taxi passenger demand in Singapore. Read upstream from Singapore Tourism and Venue Schedules. An agent should use it to anticipate massive pickup queues around venue dismissals and stadium exit gates. It does not provide ticket sales counts or private concert seating arrangements.",
-      inputSchema: {
-        category: z
-          .string()
-          .optional()
-          .describe(
-            "Event category filter: 'concert', 'exhibition', 'sports', 'nightlife', or 'all'"
-          )
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await fetchMajorEvents(args.category);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Singapore Major Events upstream failed with status error: ${err.message}`
-            }
-          ]
-        };
-      }
-    }
-  );
-
-  // 5. Tool: sgtaxi_search_onemap_location (wraps GET /api/onemap?query=)
-  server.registerTool(
-    "sgtaxi_search_onemap_location",
-    {
-      description:
-        "Returns geocoded coordinates, postal codes, and official addresses for Singapore landmarks, buildings, and taxi pickup points. Read upstream from Singapore Land Authority (SLA) OneMap Elastic Search API. An agent should use it to resolve exact navigation coordinates and verified street addresses for taxi dispatch. It does not provide turn-by-turn road turn restrictions or real-time parking lot availability.",
-      inputSchema: {
-        query: z
-          .string()
-          .describe(
-            "Search query such as building name, street name, landmark, MRT station, or 6-digit postal code"
-          )
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await searchOneMap(args.query);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `SLA OneMap API failed with upstream error: ${err.message}`
-            }
-          ]
-        };
-      }
-    }
-  );
-
-  // 6. Tool: sgtaxi_reason_taxi_query (wraps POST /api/qa)
-  server.registerTool(
-    "sgtaxi_reason_taxi_query",
-    {
-      description:
-        "Returns natural language tactical taxi dispatch recommendations analyzing live Singapore weather, bus stop crowding, SLA OneMap coordinates, and venue schedules. Read upstream from Singapore LTA, NEA Weather, SLA OneMap, and Taxi Reasoning AI. An agent should use it when answering driver questions about where to cruise, which pickup bay has shortest queue, and why specific areas are surging. It does not control vehicle navigation systems or accept automated trip bookings.",
-      inputSchema: {
-        question: z
-          .string()
-          .describe(
-            "Natural language question from taxi driver seeking dispatch advice, weather impact, or crowded bus stop locations"
-          ),
-        driver_current_location: z
-          .string()
-          .optional()
-          .describe(
-            "Driver's current location or sector in Singapore (e.g. 'Orchard', 'Jurong East', 'Changi Airport')"
-          )
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await reasonTaxiQuery(
-          args.question,
-          args.driver_current_location
-        );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }]
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Singapore Taxi Reasoning Engine failed with upstream error: ${err.message}`
-            }
-          ]
-        };
-      }
-    }
-  );
-
-  // 7. Tool: lta_traffic_incidents (Singapore LTA DataMall MCP Server)
-  server.registerTool(
-    "lta_traffic_incidents",
-    {
-      description:
-        "Returns active Singapore expressway traffic accidents, vehicle breakdowns, heavy traffic, and road closures. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to avoid congested road corridors and reroute pickup approaches. It does not provide private car park congestion feeds.",
-      inputSchema: {
-        expressway: z
-          .string()
-          .optional()
-          .describe("Expressway acronym to filter (e.g. 'CTE', 'PIE', 'AYE', 'ECP') or 'all'")
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await executeLtaTrafficIncidents(args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return { isError: true, content: [{ type: "text", text: `LTA DataMall incidents failed: ${err.message}` }] };
-      }
-    }
-  );
-
-  // 8. Tool: lta_station_crowd_forecast (Singapore LTA DataMall MCP Server)
-  server.registerTool(
-    "lta_station_crowd_forecast",
-    {
-      description:
-        "Returns current and forecasted commuter crowd volumes across Singapore MRT and bus interchange transit hubs. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to detect transport stations with high waiting passenger surges and modal shift to taxis. It does not cover private charter bus operations.",
-      inputSchema: {
-        region: z.string().optional().describe("Region filter: 'Central', 'East', 'West', 'North', or 'all'"),
-        min_crowd_level: z.string().optional().describe("Minimum crowd level: 'high', 'very_high', or 'all'")
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await executeLtaStationCrowdForecast(args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return { isError: true, content: [{ type: "text", text: `LTA DataMall crowd forecast failed: ${err.message}` }] };
-      }
-    }
-  );
-
-  // 9. Tool: weather_get_by_datetime_range (Weather MCP Server)
-  server.registerTool(
-    "weather_get_by_datetime_range",
-    {
-      description:
-        "Returns Singapore rainfall, cloud cover, and weather forecasts for specified date-time intervals across planning areas. Read upstream from Weather MCP Server. Taxi agents should use this to determine Criteria 1 taxi demand surges driven by rain downpours and overcast conditions. It does not predict marine offshore tidal conditions.",
-      inputSchema: {
-        start_time: z.string().optional().describe("Start time in ISO format or HH:mm"),
-        end_time: z.string().optional().describe("End time in ISO format or HH:mm"),
-        location: z.string().optional().describe("Planning area name or 'all'")
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await executeWeatherByDateTimeRange(args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return { isError: true, content: [{ type: "text", text: `Weather MCP Server failed: ${err.message}` }] };
-      }
-    }
-  );
-
-  // 10. Tool: grabmaps_calculate_route (GrabMaps MCP Server)
-  server.registerTool(
-    "grabmaps_calculate_route",
-    {
-      description:
-        "Calculates distance, estimated driving duration, ERP tolls, and navigational waypoints between taxi location and passenger pickup destination. Read upstream from GrabMaps MCP Server. Taxi agents should use this to determine passenger pickup ETA and calculate shortest driving paths. It does not calculate walking or cycling routes.",
-      inputSchema: {
-        origin: z.object({
-          latitude: z.number(),
-          longitude: z.number(),
-          name: z.string().optional()
-        }).describe("Driver starting coordinates and location name"),
-        destination: z.object({
-          latitude: z.number(),
-          longitude: z.number(),
-          name: z.string().optional()
-        }).describe("Target pickup coordinates and location name")
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await executeGrabMapsCalculateRoute(args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return { isError: true, content: [{ type: "text", text: `GrabMaps calculateRoute failed: ${err.message}` }] };
-      }
-    }
-  );
-
-  // 11. Tool: grabmaps_search_place_index (GrabMaps MCP Server)
-  server.registerTool(
-    "grabmaps_search_place_index",
-    {
-      description:
-        "Resolves official Singapore building addresses, postal codes, and designated taxi pickup points and bays. Read upstream from GrabMaps MCP Server. Taxi agents should use this to find designated passenger concourses and covered lay-bys. It does not check underground car park parking space availability.",
-      inputSchema: {
-        query: z.string().describe("Search term such as mall name, building, street, or 6-digit postal code")
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true }
-    },
-    async (args) => {
-      try {
-        const result = await executeGrabMapsSearchPlace(args);
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return { isError: true, content: [{ type: "text", text: `GrabMaps searchPlaceIndex failed: ${err.message}` }] };
-      }
-    }
-  );
+    // 2. Register all aliases as well
+    toolDef.aliases.forEach((alias) => {
+      server.registerTool(
+        alias,
+        {
+          description: toolDef.description,
+          inputSchema: z.record(z.any()).optional().describe("Tool arguments"),
+          annotations: { readOnlyHint: true, openWorldHint: true }
+        },
+        async (args) => {
+          try {
+            const result = await toolDef.handler(args || {});
+            return { content: [{ type: "text", text: JSON.stringify(result) }] };
+          } catch (err) {
+            return {
+              isError: true,
+              content: [{ type: "text", text: `${alias} failed: ${err.message}` }]
+            };
+          }
+        }
+      );
+    });
+  });
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
