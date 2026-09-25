@@ -64,6 +64,44 @@ const REGISTERED_TOOLS: ToolInfo[] = [
       driver_current_location: "Orchard"
     },
     routeEquivalent: "POST /api/qa"
+  },
+  {
+    name: "lta_traffic_incidents",
+    description:
+      "Returns active Singapore expressway traffic accidents, vehicle breakdowns, heavy traffic, and road closures. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to avoid congested road corridors and reroute pickup approaches. It does not provide private car park congestion feeds.",
+    defaultArgs: { expressway: "all" },
+    routeEquivalent: "LTA DataMall MCP: traffic_incidents"
+  },
+  {
+    name: "lta_station_crowd_forecast",
+    description:
+      "Returns current and forecasted commuter crowd volumes across Singapore MRT and bus interchange transit hubs. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to detect transport stations with high waiting passenger surges and modal shift to taxis. It does not cover private charter bus operations.",
+    defaultArgs: { region: "all", min_crowd_level: "high" },
+    routeEquivalent: "LTA DataMall MCP: station_crowd_forecast"
+  },
+  {
+    name: "weather_get_by_datetime_range",
+    description:
+      "Returns Singapore rainfall, cloud cover, and weather forecasts for specified date-time intervals across planning areas. Read upstream from Weather MCP Server. Taxi agents should use this to determine Criteria 1 taxi demand surges driven by rain downpours and overcast conditions. It does not predict marine offshore tidal conditions.",
+    defaultArgs: { location: "all" },
+    routeEquivalent: "Weather MCP: get_weather_byDateTimeRange"
+  },
+  {
+    name: "grabmaps_calculate_route",
+    description:
+      "Calculates distance, estimated driving duration, ERP tolls, and navigational waypoints between taxi location and passenger pickup destination. Read upstream from GrabMaps MCP Server. Taxi agents should use this to determine passenger pickup ETA and calculate shortest driving paths. It does not calculate walking or cycling routes.",
+    defaultArgs: {
+      origin: { latitude: 1.305, longitude: 103.845, name: "Driver Current Location (Central)" },
+      destination: { latitude: 1.304, longitude: 103.8318, name: "ION Orchard Taxi Stand F12" }
+    },
+    routeEquivalent: "GrabMaps MCP: calculateRoute"
+  },
+  {
+    name: "grabmaps_search_place_index",
+    description:
+      "Resolves official Singapore building addresses, postal codes, and designated taxi pickup points and bays. Read upstream from GrabMaps MCP Server. Taxi agents should use this to find designated passenger concourses and covered lay-bys. It does not check underground car park parking space availability.",
+    defaultArgs: { query: "Orchard" },
+    routeEquivalent: "GrabMaps MCP: searchPlaceIndexForPosition"
   }
 ];
 

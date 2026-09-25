@@ -73,16 +73,54 @@ export interface OneMapSearchResult {
   taxi_access_note: string;
 }
 
-export interface TaxiReasoningResult {
-  source: string;
-  fetched_at: string;
+export interface McpServerExecutionLog {
+  server: string;
+  tool: string;
+  request: any;
+  response: any;
+  latency_ms: number;
+}
+
+export interface McpQuestionAnswerResponse {
   question: string;
   driver_location: string;
-  tactical_summary: string;
-  criteria_1_weather_analysis: string;
-  criteria_2_bus_crowd_analysis: string;
-  primary_target: HotspotItem;
-  alternative_hotspots: HotspotItem[];
-  active_events: MajorEventItem[];
-  driver_tactical_tips: string[];
+  synthesized_answer: string;
+  total_execution_time_ms: number;
+  mcp_servers_used: Array<{
+    name: string;
+    tools_called: string[];
+    status: string;
+  }>;
+  reasoning_breakdown: {
+    weather_mcp_analysis: string;
+    lta_datamall_mcp_analysis: string;
+    grabmaps_mcp_routing: string;
+  };
+  primary_target_pickup: {
+    name: string;
+    address: string;
+    coordinates: Coordinates;
+    station_code: string;
+    station_name: string;
+    commuters_waiting: number;
+    taxi_switch_probability: string;
+    route_summary: {
+      distance_km: number;
+      estimated_duration_minutes: number;
+      eta_timestamp: string;
+      erp_toll_info: string;
+      recommended_lane: string;
+    };
+    navigation_waypoints: number[][];
+  };
+  traffic_incidents_alert: Array<{
+    id: string;
+    type: string;
+    expressway: string;
+    location: string;
+    message: string;
+    coordinates: Coordinates;
+    driver_impact: string;
+  }>;
+  mcp_call_logs: McpServerExecutionLog[];
 }

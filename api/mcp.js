@@ -9,6 +9,13 @@ import {
   searchOneMap,
   reasonTaxiQuery
 } from "../lib/taxiData.js";
+import {
+  executeLtaTrafficIncidents,
+  executeLtaStationCrowdForecast,
+  executeWeatherByDateTimeRange,
+  executeGrabMapsCalculateRoute,
+  executeGrabMapsSearchPlace
+} from "../lib/mcpServers.js";
 
 /**
  * MCP Server Handler for Singapore Taxi Demand & Reasoning Navigator
@@ -266,6 +273,126 @@ export default async function handler(req, res) {
             }
           ]
         };
+      }
+    }
+  );
+
+  // 7. Tool: lta_traffic_incidents (Singapore LTA DataMall MCP Server)
+  server.registerTool(
+    "lta_traffic_incidents",
+    {
+      description:
+        "Returns active Singapore expressway traffic accidents, vehicle breakdowns, heavy traffic, and road closures. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to avoid congested road corridors and reroute pickup approaches. It does not provide private car park congestion feeds.",
+      inputSchema: {
+        expressway: z
+          .string()
+          .optional()
+          .describe("Expressway acronym to filter (e.g. 'CTE', 'PIE', 'AYE', 'ECP') or 'all'")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await executeLtaTrafficIncidents(args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: `LTA DataMall incidents failed: ${err.message}` }] };
+      }
+    }
+  );
+
+  // 8. Tool: lta_station_crowd_forecast (Singapore LTA DataMall MCP Server)
+  server.registerTool(
+    "lta_station_crowd_forecast",
+    {
+      description:
+        "Returns current and forecasted commuter crowd volumes across Singapore MRT and bus interchange transit hubs. Read upstream from Singapore LTA DataMall MCP Server. Taxi agents should use this to detect transport stations with high waiting passenger surges and modal shift to taxis. It does not cover private charter bus operations.",
+      inputSchema: {
+        region: z.string().optional().describe("Region filter: 'Central', 'East', 'West', 'North', or 'all'"),
+        min_crowd_level: z.string().optional().describe("Minimum crowd level: 'high', 'very_high', or 'all'")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await executeLtaStationCrowdForecast(args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: `LTA DataMall crowd forecast failed: ${err.message}` }] };
+      }
+    }
+  );
+
+  // 9. Tool: weather_get_by_datetime_range (Weather MCP Server)
+  server.registerTool(
+    "weather_get_by_datetime_range",
+    {
+      description:
+        "Returns Singapore rainfall, cloud cover, and weather forecasts for specified date-time intervals across planning areas. Read upstream from Weather MCP Server. Taxi agents should use this to determine Criteria 1 taxi demand surges driven by rain downpours and overcast conditions. It does not predict marine offshore tidal conditions.",
+      inputSchema: {
+        start_time: z.string().optional().describe("Start time in ISO format or HH:mm"),
+        end_time: z.string().optional().describe("End time in ISO format or HH:mm"),
+        location: z.string().optional().describe("Planning area name or 'all'")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await executeWeatherByDateTimeRange(args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: `Weather MCP Server failed: ${err.message}` }] };
+      }
+    }
+  );
+
+  // 10. Tool: grabmaps_calculate_route (GrabMaps MCP Server)
+  server.registerTool(
+    "grabmaps_calculate_route",
+    {
+      description:
+        "Calculates distance, estimated driving duration, ERP tolls, and navigational waypoints between taxi location and passenger pickup destination. Read upstream from GrabMaps MCP Server. Taxi agents should use this to determine passenger pickup ETA and calculate shortest driving paths. It does not calculate walking or cycling routes.",
+      inputSchema: {
+        origin: z.object({
+          latitude: z.number(),
+          longitude: z.number(),
+          name: z.string().optional()
+        }).describe("Driver starting coordinates and location name"),
+        destination: z.object({
+          latitude: z.number(),
+          longitude: z.number(),
+          name: z.string().optional()
+        }).describe("Target pickup coordinates and location name")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await executeGrabMapsCalculateRoute(args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: `GrabMaps calculateRoute failed: ${err.message}` }] };
+      }
+    }
+  );
+
+  // 11. Tool: grabmaps_search_place_index (GrabMaps MCP Server)
+  server.registerTool(
+    "grabmaps_search_place_index",
+    {
+      description:
+        "Resolves official Singapore building addresses, postal codes, and designated taxi pickup points and bays. Read upstream from GrabMaps MCP Server. Taxi agents should use this to find designated passenger concourses and covered lay-bys. It does not check underground car park parking space availability.",
+      inputSchema: {
+        query: z.string().describe("Search term such as mall name, building, street, or 6-digit postal code")
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await executeGrabMapsSearchPlace(args);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: `GrabMaps searchPlaceIndex failed: ${err.message}` }] };
       }
     }
   );

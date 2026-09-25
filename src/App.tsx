@@ -15,7 +15,8 @@ import {
   HotspotItem,
   BusStopItem,
   WeatherForecastItem,
-  MajorEventItem
+  MajorEventItem,
+  Coordinates
 } from "./types";
 import {
   Car,
@@ -38,6 +39,13 @@ export default function App() {
   const [events, setEvents] = useState<MajorEventItem[]>([]);
 
   const [selectedHotspot, setSelectedHotspot] = useState<HotspotItem | null>(null);
+  const [activeRoute, setActiveRoute] = useState<{
+    name: string;
+    coordinates: Coordinates;
+    route_summary: any;
+    waypoints: number[][];
+    incidents: any[];
+  } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialQAQuestion, setInitialQAQuestion] = useState("");
@@ -198,6 +206,8 @@ export default function App() {
                   events={events}
                   selectedHotspot={selectedHotspot}
                   onSelectHotspot={setSelectedHotspot}
+                  activeRoute={activeRoute}
+                  onClearRoute={() => setActiveRoute(null)}
                 />
               </div>
 
@@ -214,10 +224,13 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: Driver Q&A Reasoning Page */}
+        {/* TAB 2: Driver Q&A Reasoning Page (Utilizing 3 MCP Servers) */}
         {activeTab === "qa" && (
           <QAPage
-            onSelectHotspotForMap={handleSelectHotspot}
+            onPlotRouteOnOneMap={(routeData) => {
+              setActiveRoute(routeData);
+              setActiveTab("map");
+            }}
             initialQuestion={initialQAQuestion}
           />
         )}

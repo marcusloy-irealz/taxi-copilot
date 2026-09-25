@@ -12,7 +12,7 @@ import {
   X,
   Compass
 } from "lucide-react";
-import { HotspotItem, BusStopItem, WeatherForecastItem, MajorEventItem, OneMapSearchResult } from "../types";
+import { HotspotItem, BusStopItem, WeatherForecastItem, MajorEventItem, OneMapSearchResult, Coordinates } from "../types";
 
 interface OneMapViewerProps {
   hotspots: HotspotItem[];
@@ -21,6 +21,14 @@ interface OneMapViewerProps {
   events: MajorEventItem[];
   selectedHotspot: HotspotItem | null;
   onSelectHotspot: (h: HotspotItem | null) => void;
+  activeRoute?: {
+    name: string;
+    coordinates: Coordinates;
+    route_summary: any;
+    waypoints: number[][];
+    incidents: any[];
+  } | null;
+  onClearRoute?: () => void;
 }
 
 export const OneMapViewer: React.FC<OneMapViewerProps> = ({
@@ -29,12 +37,15 @@ export const OneMapViewer: React.FC<OneMapViewerProps> = ({
   weatherList,
   events,
   selectedHotspot,
-  onSelectHotspot
+  onSelectHotspot,
+  activeRoute = null,
+  onClearRoute
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const routeLayerRef = useRef<L.LayerGroup | null>(null);
 
   const [mapStyle, setMapStyle] = useState<"Night" | "Default" | "Grey">("Night");
   const [showHotspots, setShowHotspots] = useState(true);
@@ -78,6 +89,10 @@ export const OneMapViewer: React.FC<OneMapViewerProps> = ({
     // Group for markers
     const markersLayer = L.layerGroup().addTo(map);
     markersLayerRef.current = markersLayer;
+
+    // Group for GrabMaps route and incidents
+    const routeLayer = L.layerGroup().addTo(map);
+    routeLayerRef.current = routeLayer;
 
     mapInstanceRef.current = map;
 
@@ -245,6 +260,94 @@ export const OneMapViewer: React.FC<OneMapViewerProps> = ({
       });
     }
   }, [hotspots, busStops, weatherList, events, showHotspots, showBusStops, showWeather, showEvents]);
+
+  // Handle active GrabMaps route rendering
+  useEffect(() => {
+    if (!mapInstanceRef.current || !routeLayerRef.current) return;
+    const layer = routeLayerRef.current;
+    layer.clearLayers();
+
+    if (!activeRoute) return;
+
+    // Draw route polyline
+    const latLngs = activeRoute.waypoints.map((w) => [w[0], w[1]] as [number, number]);
+    const polyline = L.polyline(latLngs, {
+      color: "#10b981",
+      weight: 6,
+      opacity: 0.9,
+      lineCap: "round",
+      dashArray: "8, 6"
+    }).addTo(layer);
+
+    // Destination Pin
+    const destIcon = L.divIcon({
+      html: `
+        <div class="relative flex items-center justify-center">
+          <span class="animate-ping absolute inline-flex h-8 w-8 rounded-full bg-emerald-400 opacity-75"></span>
+          <div class="h-8 w-8 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-slate-950 font-black text-xs shadow-2xl">
+            🏁
+          </div>
+        </div>
+      `,
+      className: "custom-dest-pin",
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+    const destMarker = L.marker(
+      [activeRoute.coordinates.latitude, activeRoute.coordinates.longitude],
+      { icon: destIcon }
+    ).addTo(layer);
+
+    destMarker
+      .bindPopup(
+        `
+      <div class="p-1 font-sans text-slate-900 text-xs">
+        <strong class="text-emerald-700 font-bold">${activeRoute.name}</strong>
+        <p class="text-[11px] text-slate-600 mt-1">GrabMaps Route: ${activeRoute.route_summary?.distance_km} km (~${activeRoute.route_summary?.estimated_duration_minutes} mins)</p>
+        <p class="text-[10px] text-amber-700 mt-0.5">${activeRoute.route_summary?.erp_toll_info}</p>
+      </div>
+    `
+      )
+      .openPopup();
+
+    // Incidents Pins from LTA DataMall
+    if (activeRoute.incidents && activeRoute.incidents.length > 0) {
+      activeRoute.incidents.forEach((inc) => {
+        const incIcon = L.divIcon({
+          html: `
+            <div class="flex items-center justify-center">
+              <div class="h-6 w-6 rounded-md bg-red-600 border border-white text-white flex items-center justify-center font-bold text-[10px] shadow-lg animate-pulse">
+                ⚠️
+              </div>
+            </div>
+          `,
+          className: "custom-inc-pin",
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+        const incMarker = L.marker([inc.coordinates.latitude, inc.coordinates.longitude], {
+          icon: incIcon
+        }).addTo(layer);
+
+        incMarker.bindPopup(`
+          <div class="p-1 font-sans text-slate-900 text-xs">
+            <span class="rounded bg-red-100 text-red-800 text-[10px] font-bold px-1.5 py-0.5">${inc.type} (${inc.expressway})</span>
+            <p class="mt-1 text-[11px] text-slate-700 font-medium">${inc.message}</p>
+            <p class="mt-1 text-[10px] text-amber-800 font-semibold">${inc.driver_impact}</p>
+          </div>
+        `);
+      });
+    }
+
+    try {
+      mapInstanceRef.current.fitBounds(polyline.getBounds(), {
+        padding: [50, 50],
+        maxZoom: 15
+      });
+    } catch (e) {
+      console.error("fitBounds error:", e);
+    }
+  }, [activeRoute]);
 
   // Handle fly to selected hotspot
   useEffect(() => {
@@ -487,6 +590,44 @@ export const OneMapViewer: React.FC<OneMapViewerProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Active GrabMaps Route Banner */}
+      {activeRoute && (
+        <div className="absolute top-28 left-3 right-3 sm:left-4 sm:right-auto sm:w-96 z-30 rounded-2xl border border-emerald-500/50 bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-lg">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-emerald-400">
+                <span>GRABMAPS ACTIVE NAVIGATION</span>
+                <span className="rounded bg-emerald-500/20 px-1 py-0.2 text-[9px]">SLA ONEMAP</span>
+              </div>
+              <h4 className="font-bold text-white text-xs mt-0.5">{activeRoute.name}</h4>
+            </div>
+            {onClearRoute && (
+              <button
+                type="button"
+                onClick={onClearRoute}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] font-mono">
+            <div className="rounded bg-slate-950/80 p-1.5 border border-slate-800">
+              <span className="text-slate-400 block">Distance:</span>
+              <span className="text-white font-bold">{activeRoute.route_summary?.distance_km} km</span>
+            </div>
+            <div className="rounded bg-slate-950/80 p-1.5 border border-slate-800">
+              <span className="text-slate-400 block">Duration & ETA:</span>
+              <span className="text-amber-400 font-bold">~{activeRoute.route_summary?.estimated_duration_minutes} mins ({activeRoute.route_summary?.eta_timestamp})</span>
+            </div>
+          </div>
+          <p className="mt-1.5 text-[10px] text-slate-300">
+            {activeRoute.route_summary?.erp_toll_info}
+          </p>
+        </div>
+      )}
 
       {/* Selected Hotspot Bottom Sheet Modal / Card */}
       {selectedHotspot && (

@@ -138,7 +138,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-            <span>Driver Q&A Reasoning</span>
+            <span>Q&A (3 MCP Servers)</span>
           </button>
 
           <button

@@ -1,4 +1,4 @@
-import { reasonTaxiQuery } from "../lib/taxiData.js";
+import { processMcpQuestionAndAnswer } from "../lib/mcpServers.js";
 
 export default async function handler(req, res) {
   try {
@@ -7,10 +7,11 @@ export default async function handler(req, res) {
     if (!question) {
       return res.status(400).json({ error: "question field is required" });
     }
-    const data = await reasonTaxiQuery(question, location);
+    const data = await processMcpQuestionAndAnswer(question, location);
     res.setHeader("Content-Type", "application/json");
     res.status(200).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 }
+
